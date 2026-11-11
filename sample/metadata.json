@@ -1,0 +1,78 @@
+{
+  "format-version": 2,
+  "table-uuid": "f0c3a8a9-6b16-4c7a-9a32-ferry000001",
+  "location": "s3://ferry-lake/warehouse/settlement",
+  "last-updated-ms": 1762300000000,
+  "last-column-id": 2,
+  "schemas": [
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {
+          "id": 1,
+          "name": "voyage_time",
+          "required": true,
+          "type": "timestamptz"
+        },
+        {
+          "id": 2,
+          "name": "ticket_no",
+          "required": false,
+          "type": "long"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "name": "voyage_day",
+          "transform": "day",
+          "source-id": 1,
+          "field-id": 1000
+        }
+      ]
+    },
+    {
+      "spec-id": 1,
+      "fields": [
+        {
+          "name": "voyage_hour",
+          "transform": "hour",
+          "source-id": 1,
+          "field-id": 1001
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 1,
+  "last-partition-id": 1001,
+  "properties": {
+    "write.format.default": "parquet"
+  },
+  "current-snapshot-id": 1001,
+  "snapshots": [
+    {
+      "snapshot-id": 1001,
+      "timestamp-ms": 1762300000000,
+      "manifest-list": "s3://ferry-lake/warehouse/settlement/metadata/snap-1001.avro",
+      "summary": {
+        "operation": "append",
+        "added-data-files": "4",
+        "added-delete-files": "2"
+      },
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [
+    {
+      "timestamp-ms": 1762300000000,
+      "snapshot-id": 1001
+    }
+  ],
+  "metadata-log": []
+}

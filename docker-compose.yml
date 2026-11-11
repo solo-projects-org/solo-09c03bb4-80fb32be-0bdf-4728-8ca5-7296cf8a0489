@@ -1,7 +1,7 @@
 services:
-  ferry-iceberg-check:
+  ferry-voyage-recover:
     build: .
-    image: ferry-iceberg-check:latest
+    image: ferry-voyage-recover:latest
     init: true
     ports:
       - "8000:8000"

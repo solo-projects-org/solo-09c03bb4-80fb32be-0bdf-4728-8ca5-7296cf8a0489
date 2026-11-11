@@ -1,8 +1,9 @@
-# 渡轮结算 · Iceberg v2 票号删除核对
+# 渡轮结算 · Iceberg v2 航次日文件补取
 
-用于核对湖仓源快照中，某航次日分区里的票号是否已被 **Iceberg v2 位置删除**
-（positional delete）标记。网页接收有效文件清单和对应 Parquet 副本，输入整数
-票号，逐条给出原文件、从 0 起算的文件内行号、是否已删除以及命中的删除文件。
+湖仓值班员做渡轮结算迁移时，需要从 Iceberg v2 备份里补取某个 **UTC 航次日**
+的 Parquet 数据文件和删除文件。备份可能缺少其他日期的 manifest，因此网页
+按 manifest list 的分区上下界只读取与所选航次日可能相交的 manifest，并导出
+一份核查页（`/verify`）可以直接读取的 CSV。
 
 ## 快速启动
 
@@ -10,7 +11,8 @@
 docker compose up --build
 ```
 
-打开 <http://localhost:8000>，点 **“载入样例”** 即可运行内置演示。接口健康检查：
+打开 <http://localhost:8000>，点 **“载入样例”** 即可运行内置演示。样例同时含
+`day(voyage_time)` 和 `hour(voyage_time)` 两个分区定义。健康检查：
 
 ```bash
 curl http://localhost:8000/healthz
@@ -24,132 +26,86 @@ docker compose down
 
 ## 网页用法
 
-1. 上传 **有效文件清单**（CSV 或 JSON）。
-2. 上传清单中所有 `data` / `position_delete` 文件的 **Parquet 副本**，可多选。
-   文件名必须与清单的 `uploaded_filename` 一致。
-3. 填写整数票号（逗号、空格、分号或换行分隔），以及票号列名（默认
-   `ticket_no`）。
-4. 开始核对。
+1. 上传 **表 `metadata.json`**（`format-version` 必须为 2）。
+2. 上传 **快照的 Avro manifest list**。
+3. 上传 **Avro manifest 副本**，可多选；副本必须保留 manifest list 中的原文件名。
+4. 选择 **UTC 航次日**，提交。
 
-上传文件只保存在一次请求的临时目录中，请求结束后删除；不会按用户文件名
-拼接服务器路径。
+没有专门选择 manifest list 时，网页会按 `metadata.json` 当前快照的
+`manifest-list` 路径中的文件名匹配上传副本。
 
-### 清单格式
+上传的 manifest 缺失/损坏只有在它 **需要被读取** 时才报错；被分区上下界确定
+为其他日期的 manifest 不必上传。所有上传文件名必须唯一，否则直接拒绝。
 
-CSV（推荐）：
+### 分区支持
+
+只支持 **同一个发航时间列** 上的单字段分区：
+
+| 分区 transform | 上下界解释 | 条目匹配 |
+| --- | --- | --- |
+| `day` | 自 1970-01-01 起的 UTC 天数 | 分区值等于所选航次日 |
+| `hour` | 自 1970-01-01 00:00 UTC 起的小时数 | 分区值落在所选航次日的 24 小时内 |
+
+manifest list 中每条 manifest 使用自己的 `partition_spec_id` 解释上下界。
+只要下界或上界缺失、无法解码，就读取该 manifest；只有上下界 **确定** 与当天
+不相交时才跳过。条目再按自己的分区值过滤，`DELETED` 条目一律排除。
+
+### 数据序列号
+
+- `EXISTING`、`ADDED` 条目保留条目自身的 `sequence_number`；
+- 只有 `ADDED` 且条目序列号为 null 时，才继承 manifest list 中该 manifest 的
+  `sequence_number`；
+- 需要读取的 manifest 缺失、损坏，或选中条目的序列号无法确定时，整次补取
+  停止，页面明确指出 manifest 原始路径，且不生成清单/CSV。
+
+### 导出 CSV
+
+CSV 列为：
 
 ```csv
 original_path,uploaded_filename,file_type,data_sequence_number
-s3://ferry-lake/warehouse/settlement/voyage_date=2026-11-05/data/data-0001.parquet,data-0001.parquet,data,7
-s3://ferry-lake/warehouse/settlement/voyage_date=2026-11-05/delete-pos/delete-pos-0001.parquet,delete-pos-0001.parquet,position_delete,12
 ```
 
-JSON 也支持，顶层可以是数组，或包含 `files` / `entries` 数组的对象：
+`file_type` 为 `data`、`position_delete` 或 `equality_delete`；该格式可直接上传
+到核查页 `/verify`。当天没有任何文件时页面显示“当天没有文件”，CSV 只含表头。
+内置样例导出的 CSV 可直接与 `sample/` 下的 Parquet 副本一起交给核查页。
 
-```json
-[
-  {
-    "original_path": "s3://.../data/data-0001.parquet",
-    "uploaded_filename": "data-0001.parquet",
-    "file_type": "data",
-    "data_sequence_number": 7
-  }
-]
-```
+## 核查页
 
-列名可使用以下别名：
-
-| 含义 | 可用列名 |
-| --- | --- |
-| 原始路径 | `original_path`, `original_file_path`, `source_path`, `path` |
-| 上传文件名 | `uploaded_filename`, `uploaded_file`, `filename` |
-| 文件类型 | `file_type`, `content`, `type` |
-| 数据序列号 | `data_sequence_number`, `sequence_number`, `seq` |
-
-`file_type` 可选值：
-
-| 值 | 行为 |
-| --- | --- |
-| `data` / `0` | 数据文件，参与扫描 |
-| `position_delete` / `positional_delete` / `1` / `delete` | 位置删除文件，参与匹配 |
-| `equality_delete` / `2` | 等值删除，**忽略**；不要求上传 Parquet 副本 |
-
-只处理位置删除。位置删除 Parquet 必须包含 `file_path`（字符串）和 `pos`
-（整数）两列，其他列（例如 Iceberg 可选的 `row`）会被忽略。
-
-## 核对规则
-
-- **行组跳读**：对每个数据文件的每个行组读取 `ticket_no` 列的 min/max 统计。
-  票号落在统计范围外时跳过该行组；统计缺失（`statistics` 为 `None` 或没有
-  min/max）时读取该行组。统计范围包含票号时也读取。
-- **原始行号**：行号始终是数据文件中从 0 起算的原始行号 =
-  前面所有行组的行数之和 + 行组内原始下标。筛选或只读取某个行组都不会重置、
-  压缩或重新编号。
-- **位置删除匹配**：删除记录必须同时满足
-  1. 删除记录的 `file_path` 精确等于清单中的 `original_path`；
-  2. `pos` 精确等于该命中行的从 0 起算的行号；
-  3. 删除文件的数据序列号 **不小于** 数据文件的数据序列号。
-
-  不满足序列号条件的候选删除文件会显示为“被规则忽略的删除记录”，但不会
-  把票判成已删除。
-- **全有或全无**：清单中的任何一个 `data` / `position_delete` 副本缺失，
-  或任一文件打不开、行组读取失败，整次核对都会中止并明确列出文件名，不显示
-  任何票号的部分结论。未出现在清单中的上传文件会被忽略并给出警告。
-
-## 内置样例
-
-`sample/` 中的演示数据由 `tools/make_sample.py` 生成：
-
-- `data-0001.parquet`：5 个行组，每个 20 行。
-  - 行组 0–3 的票号范围分别是 1000–1019、2000–2019、3000–3019、4000–4019。
-  - 票号 **4242** 在第 5 个行组（索引 4），全局行号 **99**。
-  - 核对 4242 时，前 4 个行组全部被统计范围排除并跳过；读取第 5 个行组后
-    仍按原始行号 99 命中 `delete-pos-0001.parquet`。
-- `data-0002.parquet`：写入时关闭了列统计，票号 **8888** 在第 2 个行组
-  （全局行号 **19**）。因为没有统计，两个行组都会被读取，随后命中
-  `delete-pos-0002.parquet`。
-- `delete-pos-stale-0001.parquet`：也指向 4242 / 行 99，但数据序列号是 6，
-  小于数据文件的 7，因此被忽略。
-- 清单中的 `equality_delete` 项没有上传副本，核对仍正常完成，因为它被忽略。
-
-样例默认票号：`4242, 1003, 4218, 8888, 9999`。其中 1003 已删除，4218
-存在但未删除，9999 不存在。
+原有票号位置删除核对页仍在 `/verify`（样例 `/verify/sample`）。它接收导出的
+CSV 和对应 Parquet 副本，逐票核对位置删除。
 
 ## 本地开发与测试
 
-需要 Python 3.11+、Flask、PyArrow。
+需要 Python 3.11+、Flask、PyArrow（核查页使用）。
 
 ```bash
 python3 -m pip install -r requirements.txt
 python3 app.py                     # http://localhost:8000
-python3 -m pytest -q               # 36 个测试
+python3 -m pytest -q
 ```
 
-重新生成样例（会覆盖 `sample/` 下的 Parquet 和清单）：
+重新生成样例（无需 PyArrow）：
 
 ```bash
 python3 tools/make_sample.py
 ```
 
+`checker/avro.py` 是纯 Python 的 Avro OCF 读写实现，支持 `null`、`deflate`、
+`snappy`、`bzip2`、`xz` 解码，不依赖额外的 Avro 库。
+
 ## 目录
 
 ```
-app.py                     Flask 路由、上传处理、票号解析
-checker/manifest.py        清单解析与校验
-checker/engine.py          PyArrow 行组跳读、行号计算、位置删除匹配
-checker/errors.py          CheckError（始终带文件名）
-templates/index.html       网页
-static/style.css           样式
-sample/                    内置样例（清单 + Parquet）
+app.py                     Flask 路由、上传处理、CSV 导出
+checker/iceberg.py         metadata/manifest list/manifest 解析与航次日筛选
+checker/avro.py            纯 Python Avro OCF 读写
+checker/engine.py          核查页的 Parquet 行组跳读与位置删除匹配
+checker/manifest.py        核查页 CSV/JSON 清单解析
+templates/recover.html     航次日补取页面
+templates/index.html       核查页
+sample/                    内置样例（metadata.json、Avro、Parquet）
 tools/make_sample.py       样例生成脚本
 tests/                     pytest 测试
-Dockerfile                 容器镜像
-docker-compose.yml         启动配置
+Dockerfile / docker-compose.yml
 ```
-
-## 已知边界
-
-- 位置删除文件会整体读入内存建立 `(file_path, pos)` 索引；适用于常见规模。
-- 每个票号独立扫描数据文件。一次输入大量票号时耗时随票号数线性增长。
-- 路径按字符串精确比较，不解析 `s3://`、`file://` 等 URI 等价关系。
-  请保证清单的 `original_path` 与删除记录中的 `file_path` 写法完全一致。

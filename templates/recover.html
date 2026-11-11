@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>渡轮结算 · UTC 航次日文件补取</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">⛴</span>
+      <div>
+        <h1>渡轮结算 · UTC 航次日文件补取</h1>
+        <p>Iceberg v2 备份 · 按 day / hour 单字段分区补齐某航次日文件</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a class="button ghost" href="{{ url_for('sample') }}">载入样例</a>
+      <a class="button ghost" href="{{ url_for('verify_index') }}">核查页</a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  {% if error %}
+  <section class="alert" role="alert">
+    <h2>未生成文件清单</h2>
+    <p>{{ error.message }}</p>
+    {% if error.files %}
+    <p class="alert-files">涉及的原始路径：</p>
+    <ul class="file-list">
+      {% for file in error.files %}<li class="mono">{{ file }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    <p class="hint">需要读取的 manifest 缺失、损坏或条目数据序列号无法确定时，
+      本次不会输出清单，也不会提供 CSV。</p>
+  </section>
+  {% endif %}
+
+  {% if result %}
+  <section class="summary">
+    <div class="summary-title">
+      <div>
+        <h2>UTC 航次日 {{ result.voyage_date.isoformat() }} 的文件</h2>
+        <p class="subtle">
+          manifest list <span class="mono">{{ result.manifest_list_path }}</span>
+          · 源列 <code>{{ result.metadata.source_column }}</code>
+        </p>
+      </div>
+      {% if source == 'sample' %}
+      <span class="badge sample">内置样例</span>
+      {% endif %}
+    </div>
+    <div class="chips">
+      <span class="chip"><b>{{ result.files|length }}</b> 个文件</span>
+      <span class="chip"><b>{{ result.data_files|length }}</b> 个数据文件</span>
+      <span class="chip"><b>{{ result.delete_files|length }}</b> 个删除文件</span>
+      <span class="chip"><b>{{ result.read_manifest_count }}</b> 个 manifest 读取</span>
+      <span class="chip"><b>{{ result.skipped_manifest_count }}</b> 个 manifest 跳过</span>
+    </div>
+
+    {% if result.is_empty %}
+    <div class="empty-state" role="status">
+      <h3>当天没有文件</h3>
+      <p class="subtle">
+        {{ result.voyage_date.isoformat() }}（UTC）没有与该航次日相交且状态不是
+        <code>DELETED</code> 的 Parquet 数据或删除文件。
+      </p>
+    </div>
+    {% else %}
+    <div class="form-actions">
+      {% if export_token %}
+      <a class="button primary" href="{{ url_for('download_export', token=export_token) }}">
+        下载核查页可读取的 CSV
+      </a>
+      {% endif %}
+      <button class="button ghost" type="button" onclick="downloadCsvFromPage()">
+        从本页下载 CSV
+      </button>
+      <span class="subtle">
+        CSV 列为 original_path、uploaded_filename、file_type、data_sequence_number，
+        可直接上传到核查页。
+      </span>
+    </div>
+    <textarea id="csv-data" class="csv-data" readonly aria-hidden="true">{{ result.csv_text() }}</textarea>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>manifest list 判定</h2>
+      <p class="subtle">
+        按每条 manifest 自己的分区定义解释上下界；只有确定与航次日不相交才跳过，
+        缺少上界或下界时一律读取。
+      </p>
+    </div>
+    <div class="table-wrap">
+      <table class="manifest-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>manifest 路径</th>
+            <th>分区</th>
+            <th>上下界</th>
+            <th>动作 / 原因</th>
+            <th>选中条目</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for report in result.manifest_reports %}
+          <tr class="{% if report.action == 'skip' %}manifest-ignored{% endif %}">
+            <td>{{ report.index }}</td>
+            <td class="mono path">{{ report.manifest_path }}</td>
+            <td>
+              <span class="kind kind-data">spec {{ report.spec_id }}</span>
+              <small>{{ report.transform }}</small>
+            </td>
+            <td class="mono">
+              {% if report.lower is not none and report.upper is not none %}
+                {{ report.lower }} – {{ report.upper }}
+              {% else %}
+                <span class="subtle">缺失</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if report.action == 'read' %}
+              <span class="pill read">读取</span>
+              {% else %}
+              <span class="pill skipped">跳过</span>
+              {% endif %}
+              <small class="reason">{{ report.reason }}</small>
+            </td>
+            <td class="row-index">{{ report.selected_entries }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card manifest-card">
+    <div class="card-head">
+      <h2>当天文件清单</h2>
+      <p class="subtle">
+        <code>DELETED</code> 条目已排除；条目的数据序列号原样保留，
+        仅 <code>ADDED</code> 缺值时才继承 manifest list 中该 manifest 的序列号。
+      </p>
+    </div>
+    {% if result.files %}
+    <div class="table-wrap">
+      <table class="manifest-table">
+        <thead>
+          <tr>
+            <th>类型</th>
+            <th>原始路径</th>
+            <th>建议上传文件名</th>
+            <th>数据序列号</th>
+            <th>来源</th>
+            <th>分区值</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in result.files %}
+          <tr>
+            <td><span class="kind kind-{{ item.file_type.value }}">{{ item.file_type.value }}</span></td>
+            <td class="mono path">{{ item.original_path }}</td>
+            <td class="mono">{{ item.suggested_upload_name }}</td>
+            <td class="row-index">{{ item.sequence_number }}</td>
+            <td>
+              {% if item.sequence_source == 'manifest' %}
+              <span class="pill read">ADDED 继承 manifest</span>
+              {% else %}
+              <span class="pill present">条目自带</span>
+              {% endif %}
+              <small class="mono">{{ item.manifest_path }}</small>
+            </td>
+            <td class="row-index">{{ item.partition_value }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty">当天没有文件。</p>
+    {% endif %}
+    {% if result.warnings %}
+    <ul class="warnings">
+      {% for warning in result.warnings %}<li>{{ warning }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="card form-card">
+    <div class="card-head">
+      <h2>上传备份并补取</h2>
+      <p class="subtle">
+        上传表 metadata.json、快照的 Avro manifest list，以及保留原文件名的
+        Avro manifest 副本；选择 UTC 航次日。备份可以缺少其他日期的 manifest。
+      </p>
+    </div>
+    <form method="post" action="{{ url_for('prepare') }}" enctype="multipart/form-data">
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">表 metadata.json <small>Iceberg v2</small></span>
+          <input type="file" name="metadata" accept=".json,application/json" required>
+          <span class="field-hint">
+            用于读取快照、manifest list 路径与分区定义；仅支持同一发航时间列的
+            <code>day</code> / <code>hour</code> 单字段分区。
+          </span>
+        </label>
+        <label class="field">
+          <span class="field-label">快照 manifest list <small>Avro</small></span>
+          <input type="file" name="manifest_list" accept=".avro,application/octet-stream">
+          <span class="field-hint">
+            若未单独选择，会按 metadata.json 当前快照的 manifest-list 文件名匹配。
+          </span>
+        </label>
+      </div>
+
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">Avro manifest 副本 <small>可多选，保留原文件名</small></span>
+          <input type="file" name="manifests" accept=".avro,application/octet-stream" multiple>
+          <span class="field-hint">
+            按 manifest list 中的文件名匹配；被分区上下界确定为其他日期的
+            manifest 不必上传。
+          </span>
+        </label>
+        <label class="field narrow">
+          <span class="field-label">UTC 航次日</span>
+          <input type="date" name="voyage_date" value="{{ voyage_date_text or sample_date }}" required>
+          <span class="field-hint">按 UTC 日期解释 day / hour 分区上下界</span>
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <button class="button primary" type="submit">补取当天文件</button>
+        <a class="button ghost" href="{{ url_for('sample') }}">载入内置样例（日分区 + 小时分区）</a>
+        <span class="subtle limit">单次上传上限 {{ max_upload_mb }} MB</span>
+      </div>
+    </form>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      <code>DELETED</code> 条目不导出；<code>EXISTING</code> 与 <code>ADDED</code>
+      保留条目自身的数据序列号，只有 <code>ADDED</code> 缺值才继承 manifest list
+      中该 manifest 的序列号。需要读取的 manifest 缺失或损坏时，整次补取停止并指出路径。
+    </p>
+  </div>
+</footer>
+<script>
+function downloadCsvFromPage() {
+  const element = document.getElementById('csv-data');
+  if (!element) return;
+  const blob = new Blob([element.value], {type: 'text/csv;charset=utf-8'});
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'voyage-{{ result.voyage_date.isoformat() if result else "day" }}.csv';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+</script>
+</body>
+</html>

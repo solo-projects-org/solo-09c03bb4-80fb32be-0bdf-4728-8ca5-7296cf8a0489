@@ -418,3 +418,34 @@ input:focus, textarea:focus {
   h1 { font-size: 18px; }
   .ticket-no { font-size: 24px; }
 }
+
+/* --- voyage-day recovery additions --- */
+.topbar-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.empty-state {
+  margin-top: 18px;
+  padding: 18px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.empty-state h3 { margin: 0 0 4px; font-size: 16px; }
+
+.csv-data {
+  width: 100%;
+  height: 1px;
+  min-height: 1px;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  opacity: 0;
+  position: absolute;
+  pointer-events: none;
+}
+
+.summary .form-actions { margin-top: 16px; }
+
+@media (max-width: 720px) {
+  .topbar-inner { align-items: flex-start; flex-direction: column; }
+  .topbar-actions { width: 100%; }
+}

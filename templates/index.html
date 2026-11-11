@@ -16,7 +16,10 @@
         <p>Iceberg v2 源快照 · 仅位置删除（positional deletes）</p>
       </div>
     </div>
-    <a class="button ghost" href="{{ url_for('sample') }}">载入样例</a>
+    <div class="topbar-actions">
+      <a class="button ghost" href="{{ url_for('sample') }}">航次日补取</a>
+      <a class="button ghost" href="{{ url_for('verify_sample') }}">载入样例</a>
+    </div>
   </div>
 </header>
 
@@ -279,7 +282,7 @@
         position_delete 文件的 Parquet 副本。
       </p>
     </div>
-    <form method="post" action="{{ url_for('check') }}" enctype="multipart/form-data">
+    <form method="post" action="{{ url_for('verify_check') }}" enctype="multipart/form-data">
       <div class="form-grid">
         <label class="field">
           <span class="field-label">有效文件清单 <small>CSV 或 JSON</small></span>
@@ -313,7 +316,7 @@
 
       <div class="form-actions">
         <button class="button primary" type="submit">开始核对</button>
-        <a class="button ghost" href="{{ url_for('sample') }}">载入内置样例（演示跳过前面的行组）</a>
+        <a class="button ghost" href="{{ url_for('verify_sample') }}">载入内置样例（演示跳过前面的行组）</a>
         <span class="subtle limit">单次上传上限 {{ max_upload_mb }} MB</span>
       </div>
     </form>
